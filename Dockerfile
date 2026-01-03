@@ -16,15 +16,12 @@ RUN chmod 0644 /etc/cron.d/mautic-cron && \
 # Create supervisord config
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Create a script to run mautic commands with proper environment
-RUN echo '#!/bin/bash\n\
-cd /var/www/html\n\
-php bin/console "$@" --env=prod 2>&1\n' > /usr/local/bin/mautic && \
-    chmod +x /usr/local/bin/mautic
-
-# Create log directory
-RUN mkdir -p /var/log/mautic && \
+# Create log directories
+RUN mkdir -p /var/log/mautic /var/log/supervisor && \
     chown -R www-data:www-data /var/log/mautic
 
-# Start supervisord (runs cron daemon)
+# Override entrypoint to skip Apache startup - we only need cron
+ENTRYPOINT []
+
+# Start supervisord (runs cron daemon only)
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
