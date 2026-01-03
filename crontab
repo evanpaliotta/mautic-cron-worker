@@ -1,0 +1,22 @@
+# Mautic Cron Jobs - SAFE MODE (no email triggers)
+# These commands update segments and campaigns but DO NOT send emails
+
+# Update contact segments every 5 minutes
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:segments:update --env=prod >> /var/log/mautic/segments.log 2>&1
+
+# Rebuild campaigns (add contacts from segments) every 5 minutes
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:rebuild --env=prod >> /var/log/mautic/campaigns.log 2>&1
+
+# Import contacts from queue every 5 minutes
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:import --env=prod >> /var/log/mautic/import.log 2>&1
+
+# =============================================================================
+# EMAIL SENDING COMMANDS - INTENTIONALLY DISABLED
+# Uncomment these when ready to send emails
+# =============================================================================
+# */5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:trigger --env=prod >> /var/log/mautic/trigger.log 2>&1
+# */5 * * * * www-data cd /var/www/html && php bin/console mautic:messages:send --env=prod >> /var/log/mautic/messages.log 2>&1
+# */5 * * * * www-data cd /var/www/html && php bin/console mautic:emails:send --env=prod >> /var/log/mautic/emails.log 2>&1
+# */5 * * * * www-data cd /var/www/html && php bin/console mautic:broadcasts:send --env=prod >> /var/log/mautic/broadcasts.log 2>&1
+
+# Empty line required at end of crontab
