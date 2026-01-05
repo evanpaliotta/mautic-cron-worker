@@ -1,22 +1,46 @@
-# Mautic Cron Jobs - SAFE MODE (no email triggers)
-# These commands update segments and campaigns but DO NOT send emails
+# Mautic Cron Jobs - PRODUCTION MODE (email sending enabled)
+# Updated: January 5, 2026
 
-# Update contact segments every 5 minutes
+# =============================================================================
+# BACKUP - Daily MySQL dump (runs at 2 AM)
+# Stores backup in Mautic's var directory with 7-day rotation
+# =============================================================================
+0 2 * * * www-data cd /var/www/html && mysqldump -h mysql.railway.internal -u root -p${MYSQL_ROOT_PASSWORD} railway > /var/www/html/var/backup-$(date +\%A).sql 2>/dev/null || echo "Backup failed at $(date)" >> /var/log/mautic/backup.log
+
+# =============================================================================
+# SEGMENT & CAMPAIGN PROCESSING (every 5 minutes)
+# =============================================================================
+# Update contact segments
 */5 * * * * www-data cd /var/www/html && php bin/console mautic:segments:update --env=prod >> /var/log/mautic/segments.log 2>&1
 
-# Rebuild campaigns (add contacts from segments) every 5 minutes
+# Rebuild campaigns (add contacts from segments)
 */5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:rebuild --env=prod >> /var/log/mautic/campaigns.log 2>&1
 
-# Import contacts from queue every 5 minutes
+# Import contacts from queue
 */5 * * * * www-data cd /var/www/html && php bin/console mautic:import --env=prod >> /var/log/mautic/import.log 2>&1
 
 # =============================================================================
-# EMAIL SENDING COMMANDS - INTENTIONALLY DISABLED
-# Uncomment these when ready to send emails
+# EMAIL SENDING - ENABLED
 # =============================================================================
-# */5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:trigger --env=prod >> /var/log/mautic/trigger.log 2>&1
-# */5 * * * * www-data cd /var/www/html && php bin/console mautic:messages:send --env=prod >> /var/log/mautic/messages.log 2>&1
-# */5 * * * * www-data cd /var/www/html && php bin/console mautic:emails:send --env=prod >> /var/log/mautic/emails.log 2>&1
-# */5 * * * * www-data cd /var/www/html && php bin/console mautic:broadcasts:send --env=prod >> /var/log/mautic/broadcasts.log 2>&1
+# Trigger campaign actions (sends scheduled emails)
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:trigger --env=prod >> /var/log/mautic/trigger.log 2>&1
+
+# Send queued messages
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:messages:send --env=prod >> /var/log/mautic/messages.log 2>&1
+
+# Send scheduled emails
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:emails:send --env=prod >> /var/log/mautic/emails.log 2>&1
+
+# Send broadcast emails
+*/5 * * * * www-data cd /var/www/html && php bin/console mautic:broadcasts:send --env=prod >> /var/log/mautic/broadcasts.log 2>&1
+
+# =============================================================================
+# MAINTENANCE (less frequent)
+# =============================================================================
+# Update max mind geo data (weekly on Sunday at 3 AM)
+0 3 * * 0 www-data cd /var/www/html && php bin/console mautic:iplookup:download --env=prod >> /var/log/mautic/iplookup.log 2>&1
+
+# Clean up old data (daily at 4 AM)
+0 4 * * * www-data cd /var/www/html && php bin/console mautic:maintenance:cleanup --days-old=365 --env=prod >> /var/log/mautic/cleanup.log 2>&1
 
 # Empty line required at end of crontab

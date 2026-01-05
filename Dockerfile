@@ -1,14 +1,13 @@
-# Mautic Cron Worker - Runs segment/campaign updates WITHOUT email triggers
-# Safe for staging - contacts get added to campaigns but NO emails sent
+# Mautic Cron Worker - PRODUCTION MODE
+# Handles segment updates, campaign triggers, email sending, and daily backups
 FROM mautic/mautic:5-apache
 
-# Install cron and supervisord
+# Install cron, supervisord, and mysql-client for backups
 USER root
-RUN apt-get update && apt-get install -y cron supervisor && \
+RUN apt-get update && apt-get install -y cron supervisor default-mysql-client && \
     rm -rf /var/lib/apt/lists/*
 
-# Create cron job file
-# NOTE: mautic:campaigns:trigger is INTENTIONALLY OMITTED to prevent email sending
+# Create cron job file (email sending ENABLED, daily backups at 2 AM)
 COPY crontab /etc/cron.d/mautic-cron
 RUN chmod 0644 /etc/cron.d/mautic-cron && \
     crontab /etc/cron.d/mautic-cron
