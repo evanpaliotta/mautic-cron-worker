@@ -1,6 +1,5 @@
-# Mautic Cron Jobs - PRODUCTION MODE (email sending enabled)
-# Updated: January 5, 2026
-
+# Mautic Cron Jobs - PRODUCTION MODE (rate limited email sending)
+# Updated: January 6, 2026
 # =============================================================================
 # BACKUP - Daily MySQL dump (runs at 2 AM)
 # Stores backup in Mautic's var directory with 7-day rotation
@@ -20,19 +19,19 @@
 */5 * * * * www-data cd /var/www/html && php bin/console mautic:import --env=prod >> /var/log/mautic/import.log 2>&1
 
 # =============================================================================
-# EMAIL SENDING - ENABLED
+# EMAIL SENDING - RATE LIMITED (1 email per minute max)
 # =============================================================================
-# Trigger campaign actions (sends scheduled emails)
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:trigger --env=prod >> /var/log/mautic/trigger.log 2>&1
+# Trigger campaign actions (sends scheduled emails) - 1 per minute
+* * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:trigger --limit=1 --env=prod >> /var/log/mautic/trigger.log 2>&1
 
-# Send queued messages
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:messages:send --env=prod >> /var/log/mautic/messages.log 2>&1
+# Send queued messages - 1 per minute
+* * * * * www-data cd /var/www/html && php bin/console mautic:messages:send --limit=1 --env=prod >> /var/log/mautic/messages.log 2>&1
 
-# Send scheduled emails
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:emails:send --env=prod >> /var/log/mautic/emails.log 2>&1
+# Send scheduled emails - 1 per minute
+* * * * * www-data cd /var/www/html && php bin/console mautic:emails:send --limit=1 --env=prod >> /var/log/mautic/emails.log 2>&1
 
-# Send broadcast emails
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:broadcasts:send --env=prod >> /var/log/mautic/broadcasts.log 2>&1
+# Send broadcast emails - 1 per minute
+* * * * * www-data cd /var/www/html && php bin/console mautic:broadcasts:send --limit=1 --env=prod >> /var/log/mautic/broadcasts.log 2>&1
 
 # =============================================================================
 # MAINTENANCE (less frequent)
