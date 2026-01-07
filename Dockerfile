@@ -23,46 +23,55 @@ RUN mkdir -p /var/log/mautic /var/log/supervisor && \
 # Create entrypoint script that sets up local.php before starting cron
 RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
-echo "=== Mautic Cron Worker Starting ==="
+echo "=== Mautic Cron Worker Starting (v2) ==="
 
-# Create local.php with database and mailer configuration from env vars
+# Create local.php using PHP to properly read environment variables
 LOCAL_PHP="/var/www/html/config/local.php"
 mkdir -p /var/www/html/config
 
-echo "Creating Mautic local.php configuration..."
-cat > "$LOCAL_PHP" << LOCALPHP
-<?php
-return array(
+echo "Creating Mautic local.php configuration via PHP..."
+php -r "
+\$config = [
     'db_driver' => 'pdo_mysql',
-    'db_host' => '${MAUTIC_DB_HOST}',
-    'db_port' => '${MAUTIC_DB_PORT}',
-    'db_name' => '${MAUTIC_DB_NAME}',
-    'db_user' => '${MAUTIC_DB_USER}',
-    'db_password' => '${MAUTIC_DB_PASSWORD}',
+    'db_host' => getenv('MAUTIC_DB_HOST'),
+    'db_port' => getenv('MAUTIC_DB_PORT') ?: '3306',
+    'db_name' => getenv('MAUTIC_DB_NAME'),
+    'db_user' => getenv('MAUTIC_DB_USER'),
+    'db_password' => getenv('MAUTIC_DB_PASSWORD'),
     'db_table_prefix' => null,
     'db_backup_tables' => true,
     'db_backup_prefix' => 'bak_',
-    'mailer_dsn' => '${MAUTIC_MAILER_DSN}',
-    'mailer_from_name' => '${MAUTIC_MAILER_FROM_NAME}',
-    'mailer_from_email' => '${MAUTIC_MAILER_FROM_EMAIL}',
+    'mailer_dsn' => getenv('MAUTIC_MAILER_DSN'),
+    'mailer_from_name' => getenv('MAUTIC_MAILER_FROM_NAME'),
+    'mailer_from_email' => getenv('MAUTIC_MAILER_FROM_EMAIL'),
     'site_url' => 'https://mautic-production-3ceb.up.railway.app',
     'secret_key' => 'mautic_cron_worker_secret_key_199os',
-);
-LOCALPHP
+];
+
+echo 'Database host: ' . \$config['db_host'] . PHP_EOL;
+echo 'Database name: ' . \$config['db_name'] . PHP_EOL;
+echo 'Mailer DSN set: ' . (empty(\$config['mailer_dsn']) ? 'NO' : 'YES') . PHP_EOL;
+
+\$content = '<?php' . PHP_EOL . 'return ' . var_export(\$config, true) . ';' . PHP_EOL;
+file_put_contents('$LOCAL_PHP', \$content);
+echo 'Configuration written to $LOCAL_PHP' . PHP_EOL;
+"
 
 chown www-data:www-data "$LOCAL_PHP"
 chmod 644 "$LOCAL_PHP"
-
-echo "Configuration created at $LOCAL_PHP"
-echo "Database host: ${MAUTIC_DB_HOST}"
-
-# Export environment variables so cron jobs can access them
-printenv | grep -E '^(MAUTIC_|MYSQL_|RAILWAY_)' >> /etc/environment
 
 # Clear Mautic cache
 echo "Clearing Mautic cache..."
 rm -rf /var/www/html/var/cache/* 2>/dev/null || true
 su -s /bin/bash www-data -c "php /var/www/html/bin/console cache:clear --env=prod --no-warmup" 2>&1 || echo "Cache clear done"
+
+# Test database connection
+echo "Testing database connection..."
+su -s /bin/bash www-data -c "php /var/www/html/bin/console doctrine:query:sql 'SELECT 1' --env=prod" 2>&1 && echo "Database connection: SUCCESS" || echo "Database connection: FAILED"
+
+# Run initial campaign trigger to process pending events
+echo "Running initial campaign trigger..."
+su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:trigger --env=prod" 2>&1 || echo "Initial trigger done"
 
 echo "=== Starting supervisord ==="
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
