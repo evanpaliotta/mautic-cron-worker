@@ -1,12 +1,27 @@
 # Mautic Cron Worker - PRODUCTION MODE
 # Handles segment updates, campaign triggers, email sending, and daily backups
 # Fixed: Creates local.php config before starting cron
+# Fixed: Patches PendingEvent.php for PHP 8.x null metadata bug
 FROM mautic/mautic:5-apache
 
 # Install cron, supervisord, and mysql-client for backups
 USER root
 RUN apt-get update && apt-get install -y cron supervisor default-mysql-client && \
     rm -rf /var/lib/apt/lists/*
+
+# CRITICAL FIX: Patch PendingEvent.php to handle null metadata
+# Bug: array_merge() fails when $log->getMetadata() returns null on PHP 8.x
+# Fix: Add null coalescing operator to ensure metadata is always an array
+RUN PENDING_EVENT="/var/www/html/app/bundles/CampaignBundle/Event/PendingEvent.php" && \
+    if [ -f "$PENDING_EVENT" ]; then \
+        echo "Patching PendingEvent.php for null metadata bug..." && \
+        sed -i 's/\$metadata = \$log->getMetadata();/\$metadata = \$log->getMetadata() ?? [];/' "$PENDING_EVENT" && \
+        echo "Patch applied successfully" && \
+        grep -n "getMetadata" "$PENDING_EVENT" | head -5; \
+    else \
+        echo "WARNING: PendingEvent.php not found at expected location"; \
+        find /var/www/html -name "PendingEvent.php" 2>/dev/null; \
+    fi
 
 # Create cron job file (email sending ENABLED, daily backups at 2 AM)
 COPY crontab /etc/cron.d/mautic-cron
