@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y cron supervisor default-mysql-client &&
 # CRITICAL FIX: Patch PendingEvent.php to handle null metadata
 # Bug: array_merge() fails when $log->getMetadata() returns null on PHP 8.x
 # Fix: Add null coalescing operator to ensure metadata is always an array
-RUN PENDING_EVENT="/var/www/html/app/bundles/CampaignBundle/Event/PendingEvent.php" && \
+# Note: Mautic 5 uses /var/www/html/docroot/ as the web root
+RUN PENDING_EVENT="/var/www/html/docroot/app/bundles/CampaignBundle/Event/PendingEvent.php" && \
     if [ -f "$PENDING_EVENT" ]; then \
         echo "Patching PendingEvent.php for null metadata bug..." && \
         sed -i 's/\$metadata = \$log->getMetadata();/\$metadata = \$log->getMetadata() ?? [];/' "$PENDING_EVENT" && \
