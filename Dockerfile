@@ -9,20 +9,35 @@ USER root
 RUN apt-get update && apt-get install -y cron supervisor default-mysql-client && \
     rm -rf /var/lib/apt/lists/*
 
-# CRITICAL FIX: Patch PendingEvent.php to handle null metadata
-# Bug: array_merge() fails when $log->getMetadata() returns null on PHP 8.x
+# CRITICAL FIX: Patch files to handle null metadata (PHP 8.x compatibility)
+# Bug: array_merge() fails when getMetadata() returns null on PHP 8.x
 # Fix: Add null coalescing operator to ensure metadata is always an array
 # Note: Mautic 5 uses /var/www/html/docroot/ as the web root
-RUN PENDING_EVENT="/var/www/html/docroot/app/bundles/CampaignBundle/Event/PendingEvent.php" && \
+RUN echo "=== Patching Mautic for PHP 8.x null metadata compatibility ===" && \
+    DOCROOT="/var/www/html/docroot" && \
+    \
+    # Patch 1: PendingEvent.php
+    PENDING_EVENT="$DOCROOT/app/bundles/CampaignBundle/Event/PendingEvent.php" && \
     if [ -f "$PENDING_EVENT" ]; then \
-        echo "Patching PendingEvent.php for null metadata bug..." && \
+        echo "Patching PendingEvent.php..." && \
         sed -i 's/\$metadata = \$log->getMetadata();/\$metadata = \$log->getMetadata() ?? [];/' "$PENDING_EVENT" && \
-        echo "Patch applied successfully" && \
-        grep -n "getMetadata" "$PENDING_EVENT" | head -5; \
-    else \
-        echo "WARNING: PendingEvent.php not found at expected location"; \
-        find /var/www/html -name "PendingEvent.php" 2>/dev/null; \
-    fi
+        echo "  - PendingEvent.php patched"; \
+    fi && \
+    \
+    # Patch 2: LeadEventLog.php (Entity)
+    LEAD_EVENT_LOG="$DOCROOT/app/bundles/CampaignBundle/Entity/LeadEventLog.php" && \
+    if [ -f "$LEAD_EVENT_LOG" ]; then \
+        echo "Patching LeadEventLog.php..." && \
+        sed -i 's/array_merge(\$this->metadata,/array_merge(\$this->metadata ?? [],/' "$LEAD_EVENT_LOG" && \
+        sed -i 's/array_merge(\$this->getMetadata(),/array_merge(\$this->getMetadata() ?? [],/' "$LEAD_EVENT_LOG" && \
+        echo "  - LeadEventLog.php patched"; \
+    fi && \
+    \
+    # Verify patches
+    echo "Verifying patches..." && \
+    grep -rn "getMetadata() ??" $DOCROOT/app/bundles/CampaignBundle/ 2>/dev/null | head -10 || true && \
+    grep -rn "metadata ??" $DOCROOT/app/bundles/CampaignBundle/ 2>/dev/null | head -10 || true && \
+    echo "=== Patching complete ==="
 
 # Create cron job file (email sending ENABLED, daily backups at 2 AM)
 COPY crontab /etc/cron.d/mautic-cron
