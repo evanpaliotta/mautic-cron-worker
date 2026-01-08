@@ -100,9 +100,15 @@ su -s /bin/bash www-data -c "php /var/www/html/bin/console cache:clear --env=pro
 echo "Testing database connection..."
 su -s /bin/bash www-data -c "php /var/www/html/bin/console doctrine:query:sql 'SELECT 1' --env=prod" 2>&1 && echo "Database connection: SUCCESS" || echo "Database connection: FAILED"
 
-# Run initial campaign trigger to process pending events
-echo "Running initial campaign trigger..."
-su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:trigger --env=prod" 2>&1 || echo "Initial trigger done"
+# Run full campaign processing sequence
+echo "Running segment update..."
+su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:segments:update --env=prod" 2>&1 || echo "Segment update done"
+
+echo "Running campaign rebuild..."
+su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:rebuild --env=prod" 2>&1 || echo "Campaign rebuild done"
+
+echo "Running campaign trigger..."
+su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:trigger --env=prod" 2>&1 || echo "Campaign trigger done"
 
 echo "=== Starting supervisord ==="
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
