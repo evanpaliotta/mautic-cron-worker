@@ -44,11 +44,14 @@ RUN echo "=== Patching Mautic for PHP 8.x null metadata compatibility ===" && \
 RUN mkdir -p /var/log/mautic /var/log/supervisor && \
     chown -R www-data:www-data /var/log/mautic
 
-# Create the Mautic command wrapper script that sources environment and logs to stdout
+# Create the Mautic command wrapper script that sources environment and logs to main process stdout
 RUN cat > /usr/local/bin/mautic-cron.sh << 'MAUTICCRON'
 #!/bin/bash
-# Mautic Cron Wrapper - ensures environment is loaded and output goes to stdout
+# Mautic Cron Wrapper - ensures environment is loaded and output goes to PID 1's stdout
 # Usage: mautic-cron.sh <command> [args...]
+
+# Redirect all output to the main process's stdout/stderr (PID 1)
+exec 1>/proc/1/fd/1 2>/proc/1/fd/2
 
 # Source the environment file if it exists
 if [ -f /etc/mautic-env ]; then
@@ -65,16 +68,9 @@ TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 # Log start
 echo "[$TIMESTAMP] CRON: Starting $CMD_NAME $@"
 
-# Run the command as www-data and capture output
-OUTPUT=$(su -s /bin/bash www-data -c "php bin/console $@ --env=prod" 2>&1)
+# Run the command as www-data
+su -s /bin/bash www-data -c "php bin/console $@ --env=prod" 2>&1
 EXIT_CODE=$?
-
-# Log output (each line prefixed with timestamp)
-if [ -n "$OUTPUT" ]; then
-    echo "$OUTPUT" | while IFS= read -r line; do
-        echo "[$TIMESTAMP] $CMD_NAME: $line"
-    done
-fi
 
 # Log completion
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
