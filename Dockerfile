@@ -131,7 +131,7 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 # =============================================================================
 # HEARTBEAT - proves cron is running (every 5 minutes)
 # =============================================================================
-*/5 * * * * root echo "[$(date '+\%Y-\%m-\%d \%H:\%M:\%S')] HEARTBEAT: Cron daemon is alive"
+*/5 * * * * root echo "[$(date '+\%Y-\%m-\%d \%H:\%M:\%S')] HEARTBEAT: Cron daemon is alive" >/proc/1/fd/1 2>&1
 
 # Empty line required at end
 CRONTAB
