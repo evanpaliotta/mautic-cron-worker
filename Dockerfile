@@ -207,8 +207,9 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # Create entrypoint script that sets up local.php before starting cron
 RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
-set -e
-echo "=== Mautic Cron Worker Starting (v4 - with DB health checks and retry) ==="
+# NOTE: Do NOT use 'set -e' here - Mautic commands may return non-zero codes
+# even on success, which would cause the script to exit before supervisord starts
+echo "=== Mautic Cron Worker Starting (v5 - fixed early exit bug) ==="
 
 # Create local.php using PHP to properly read environment variables
 LOCAL_PHP="/var/www/html/config/local.php"
