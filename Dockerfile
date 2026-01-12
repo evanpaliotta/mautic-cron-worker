@@ -133,8 +133,11 @@ if ! /usr/local/bin/check-db.sh 5 3; then
     exit 1
 fi
 
+# Build the full command string
+FULL_CMD="php bin/console $* --env=prod"
+
 # Run the command as www-data with timeout (5 minutes max)
-timeout 300 su -s /bin/bash www-data -c "php bin/console $@ --env=prod" 2>&1
+timeout 300 su -s /bin/bash www-data -c "$FULL_CMD" 2>&1
 EXIT_CODE=$?
 
 # Log completion
