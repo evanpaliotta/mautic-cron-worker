@@ -1,78 +1,70 @@
 # Mautic Cron Worker
 
-A separate Railway service that runs Mautic cron jobs for segment updates and campaign rebuilds.
+A separate Railway service that runs Mautic cron jobs for segment updates, campaign processing, email sending, and database backups.
 
-## SAFE MODE (Current Configuration)
+**Version:** v5 (January 2026) - Fixed container stability and database resilience
 
-This worker is configured in **SAFE MODE**:
+## PRODUCTION MODE (Current Configuration)
+
+This worker is configured in **PRODUCTION MODE**:
 - Segments are updated every 5 minutes
 - Contacts are added to campaigns from segments
-- **NO EMAILS ARE SENT** (trigger commands are disabled)
+- **EMAILS ARE SENT** (all trigger commands enabled)
+- **DAILY BACKUPS** at 2 AM with 7-day rotation
 
-## Deployment Instructions
+## Required Environment Variables
 
-### 1. Deploy to Railway
+The cron worker needs this variable set in Railway:
 
+```
+MYSQL_ROOT_PASSWORD=IfDvyzhQlghCluRzeklkbWUFiLwoqwLQ
+```
+
+## Cron Jobs
+
+### Every 5 Minutes
+
+| Command | Purpose | Status |
+|---------|---------|--------|
+| `mautic:segments:update` | Updates segment membership | ENABLED |
+| `mautic:campaigns:rebuild` | Adds contacts to campaigns | ENABLED |
+| `mautic:import` | Processes queued imports | ENABLED |
+| `mautic:campaigns:trigger` | Triggers campaign actions (sends emails) | ENABLED |
+| `mautic:messages:send` | Sends queued messages | ENABLED |
+| `mautic:emails:send` | Sends scheduled emails | ENABLED |
+| `mautic:broadcasts:send` | Sends broadcast emails | ENABLED |
+
+### Daily/Weekly Maintenance
+
+| Schedule | Command | Purpose |
+|----------|---------|---------|
+| 2 AM Daily | mysqldump | Database backup (7-day rotation) |
+| 3 AM Sunday | mautic:iplookup:download | Update geo IP data |
+| 4 AM Daily | mautic:maintenance:cleanup | Clean data older than 365 days |
+
+## Backups
+
+Backups are stored at `/var/www/html/var/backup-{dayname}.sql`
+
+Files rotate weekly:
+- `backup-Monday.sql`
+- `backup-Tuesday.sql`
+- ... etc
+
+To restore from backup:
+```bash
+mysql -h mysql.railway.internal -u root -p railway < /var/www/html/var/backup-Monday.sql
+```
+
+## Deployment
+
+Changes are deployed automatically via GitHub integration.
+
+To manually redeploy:
 ```bash
 cd /Users/evanpaliotta/Desktop/199OS\ GTM/09-email-sequencing/mautic-cron-worker
-
-# Login to Railway
-railway login
-
-# Link to Mautic project
-railway link
-
-# Deploy as a new service
-railway up --service mautic-cron
+git add . && git commit -m "Update cron config" && git push
 ```
-
-### 2. Configure Environment Variables
-
-The cron worker needs the same database connection as your main Mautic instance.
-Copy these environment variables from your main Mautic service:
-
-- `MAUTIC_DB_HOST`
-- `MAUTIC_DB_NAME`
-- `MAUTIC_DB_USER`
-- `MAUTIC_DB_PASSWORD`
-- `MAUTIC_SECRET_KEY`
-- `MAUTIC_URL`
-
-### 3. Verify Cron is Running
-
-Check the logs in Railway dashboard or run:
-```bash
-railway logs --service mautic-cron
-```
-
-You should see output every 5 minutes showing segment and campaign updates.
-
-## Enabling Email Sending
-
-When you're ready to start sending emails, edit the `crontab` file and uncomment:
-
-```cron
-# Uncomment these lines:
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:campaigns:trigger --env=prod
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:messages:send --env=prod
-*/5 * * * * www-data cd /var/www/html && php bin/console mautic:emails:send --env=prod
-```
-
-Then redeploy:
-```bash
-railway up --service mautic-cron
-```
-
-## Cron Jobs Explained
-
-| Command | Frequency | Purpose | Status |
-|---------|-----------|---------|--------|
-| `mautic:segments:update` | Every 5 min | Updates segment membership | ENABLED |
-| `mautic:campaigns:rebuild` | Every 5 min | Adds contacts to campaigns | ENABLED |
-| `mautic:import` | Every 5 min | Processes queued imports | ENABLED |
-| `mautic:campaigns:trigger` | Every 5 min | Triggers campaign actions (sends emails) | DISABLED |
-| `mautic:messages:send` | Every 5 min | Sends queued messages | DISABLED |
-| `mautic:emails:send` | Every 5 min | Sends scheduled emails | DISABLED |
 
 ## Monitoring
 
@@ -80,3 +72,21 @@ Logs are stored in `/var/log/mautic/`:
 - `segments.log` - Segment update logs
 - `campaigns.log` - Campaign rebuild logs
 - `import.log` - Import processing logs
+- `trigger.log` - Campaign trigger logs
+- `messages.log` - Message sending logs
+- `emails.log` - Email sending logs
+- `broadcasts.log` - Broadcast logs
+- `backup.log` - Backup errors (if any)
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Container with cron + mysql-client |
+| `crontab` | Scheduled job definitions |
+| `supervisord.conf` | Process supervisor config |
+| `railway.json` | Railway deployment config |
+
+---
+
+*See `/09-email-sequencing/MAUTIC-SETUP.md` for complete Mautic documentation.*
