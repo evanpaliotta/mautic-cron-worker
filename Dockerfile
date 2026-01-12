@@ -44,10 +44,64 @@ RUN echo "=== Patching Mautic for PHP 8.x null metadata compatibility ===" && \
 RUN mkdir -p /var/log/mautic /var/log/supervisor && \
     chown -R www-data:www-data /var/log/mautic
 
-# Create the Mautic command wrapper script that sources environment and logs to main process stdout
+# Create database health check script
+RUN cat > /usr/local/bin/check-db.sh << 'CHECKDB'
+#!/bin/bash
+# Database health check with retry logic
+# Returns 0 if database is reachable, 1 otherwise
+
+MAX_RETRIES=${1:-3}
+RETRY_DELAY=${2:-5}
+
+# Source environment
+if [ -f /etc/mautic-env ]; then
+    source /etc/mautic-env
+fi
+
+for i in $(seq 1 $MAX_RETRIES); do
+    # Try to connect using PHP/PDO (same as Mautic uses)
+    php -r "
+    try {
+        \$host = getenv('MAUTIC_DB_HOST') ?: 'localhost';
+        \$port = getenv('MAUTIC_DB_PORT') ?: '3306';
+        \$name = getenv('MAUTIC_DB_NAME') ?: 'mautic';
+        \$user = getenv('MAUTIC_DB_USER') ?: 'root';
+        \$pass = getenv('MAUTIC_DB_PASSWORD') ?: '';
+
+        \$dsn = \"mysql:host=\$host;port=\$port;dbname=\$name\";
+        \$options = [
+            PDO::ATTR_TIMEOUT => 10,
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4'
+        ];
+
+        \$pdo = new PDO(\$dsn, \$user, \$pass, \$options);
+        \$pdo->query('SELECT 1');
+        exit(0);
+    } catch (Exception \$e) {
+        fwrite(STDERR, 'DB check failed: ' . \$e->getMessage() . PHP_EOL);
+        exit(1);
+    }
+    " 2>/dev/null
+
+    if [ $? -eq 0 ]; then
+        exit 0
+    fi
+
+    if [ $i -lt $MAX_RETRIES ]; then
+        sleep $RETRY_DELAY
+    fi
+done
+
+exit 1
+CHECKDB
+
+RUN chmod +x /usr/local/bin/check-db.sh
+
+# Create the Mautic command wrapper script with database health check and retry
 RUN cat > /usr/local/bin/mautic-cron.sh << 'MAUTICCRON'
 #!/bin/bash
-# Mautic Cron Wrapper - ensures environment is loaded and output goes to PID 1's stdout
+# Mautic Cron Wrapper - with database health check and retry logic
 # Usage: mautic-cron.sh <command> [args...]
 
 # Redirect all output to the main process's stdout/stderr (PID 1)
@@ -68,14 +122,23 @@ TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 # Log start
 echo "[$TIMESTAMP] CRON: Starting $CMD_NAME $@"
 
-# Run the command as www-data
-su -s /bin/bash www-data -c "php bin/console $@ --env=prod" 2>&1
+# Check database connectivity with retry (5 attempts, 3 second delay)
+if ! /usr/local/bin/check-db.sh 5 3; then
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$TIMESTAMP] CRON: SKIPPED $CMD_NAME - database unreachable after 5 attempts"
+    exit 1
+fi
+
+# Run the command as www-data with timeout (5 minutes max)
+timeout 300 su -s /bin/bash www-data -c "php bin/console $@ --env=prod" 2>&1
 EXIT_CODE=$?
 
 # Log completion
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 if [ $EXIT_CODE -eq 0 ]; then
     echo "[$TIMESTAMP] CRON: Completed $CMD_NAME (success)"
+elif [ $EXIT_CODE -eq 124 ]; then
+    echo "[$TIMESTAMP] CRON: TIMEOUT $CMD_NAME (exceeded 5 minutes)"
 else
     echo "[$TIMESTAMP] CRON: Completed $CMD_NAME (exit code: $EXIT_CODE)"
 fi
@@ -145,7 +208,7 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
 set -e
-echo "=== Mautic Cron Worker Starting (v3 - with visible cron output) ==="
+echo "=== Mautic Cron Worker Starting (v4 - with DB health checks and retry) ==="
 
 # Create local.php using PHP to properly read environment variables
 LOCAL_PHP="/var/www/html/config/local.php"
@@ -187,29 +250,52 @@ echo "Saving environment variables for cron..."
 printenv | grep -E '^(MAUTIC_|MYSQL_|PATH=)' > /etc/mautic-env
 chmod 644 /etc/mautic-env
 
+# CRITICAL: Wait for database to be available before proceeding
+echo ""
+echo "=== Waiting for database to be available ==="
+MAX_WAIT=120
+WAITED=0
+while ! /usr/local/bin/check-db.sh 1 1 2>/dev/null; do
+    WAITED=$((WAITED + 5))
+    if [ $WAITED -ge $MAX_WAIT ]; then
+        echo "ERROR: Database not available after ${MAX_WAIT}s - starting anyway (cron will retry)"
+        break
+    fi
+    echo "Waiting for database... (${WAITED}s/${MAX_WAIT}s)"
+    sleep 5
+done
+
+if [ $WAITED -lt $MAX_WAIT ]; then
+    echo "Database connection: SUCCESS"
+fi
+
 # Clear Mautic cache
+echo ""
 echo "Clearing Mautic cache..."
 rm -rf /var/www/html/var/cache/* 2>/dev/null || true
 su -s /bin/bash www-data -c "php /var/www/html/bin/console cache:clear --env=prod --no-warmup" 2>&1 || echo "Cache clear done"
 
-# Test database connection
-echo "Testing database connection..."
-su -s /bin/bash www-data -c "php /var/www/html/bin/console doctrine:query:sql 'SELECT 1' --env=prod" 2>&1 && echo "Database connection: SUCCESS" || echo "Database connection: FAILED"
-
-# Run full campaign processing sequence on startup
+# Run full campaign processing sequence on startup (with DB check)
 echo ""
 echo "=== Running initial campaign processing ==="
-echo "Running segment update..."
-su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:segments:update --env=prod" 2>&1 || echo "Segment update done"
 
-echo "Running campaign rebuild..."
-su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:rebuild --env=prod" 2>&1 || echo "Campaign rebuild done"
+if /usr/local/bin/check-db.sh 3 2; then
+    echo "Running segment update..."
+    su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:segments:update --env=prod" 2>&1 || echo "Segment update done"
 
-echo "Running campaign trigger..."
-su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:trigger --env=prod" 2>&1 || echo "Campaign trigger done"
+    echo "Running campaign rebuild..."
+    su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:rebuild --env=prod" 2>&1 || echo "Campaign rebuild done"
+
+    echo "Running campaign trigger..."
+    su -s /bin/bash www-data -c "php /var/www/html/bin/console mautic:campaigns:trigger --env=prod" 2>&1 || echo "Campaign trigger done"
+else
+    echo "SKIPPED initial processing - database not available (cron will handle it)"
+fi
 
 echo ""
-echo "=== Starting supervisord (cron will run every minute) ==="
+echo "=== Starting supervisord ==="
+echo "Services: cron (every minute), db-watchdog (every 60s), keepalive (every 30s)"
+echo "Each cron job checks DB connectivity before running (5 retries, 3s delay)"
 echo "You should see HEARTBEAT messages every 5 minutes to confirm cron is working"
 echo ""
 exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf
