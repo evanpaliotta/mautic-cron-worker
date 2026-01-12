@@ -177,11 +177,11 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 # Trigger campaign actions (sends scheduled emails)
 * * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:trigger --limit=5
 
-# Send queued messages
-* * * * * root /usr/local/bin/mautic-cron.sh mautic:messages:send --limit=5
+# Send queued messages (no --limit option available)
+* * * * * root /usr/local/bin/mautic-cron.sh mautic:messages:send
 
-# Send scheduled emails
-* * * * * root /usr/local/bin/mautic-cron.sh mautic:emails:send --limit=5
+# Send scheduled emails (no --limit option available)
+* * * * * root /usr/local/bin/mautic-cron.sh mautic:emails:send
 
 # Send broadcast emails
 * * * * * root /usr/local/bin/mautic-cron.sh mautic:broadcasts:send --limit=5
