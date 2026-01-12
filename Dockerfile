@@ -175,15 +175,12 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 # EMAIL SENDING - RATE LIMITED (every minute)
 # =============================================================================
 # Trigger campaign actions (sends scheduled emails)
-* * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:trigger --limit=5
+* * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:trigger --batch-limit=5
 
-# Send queued messages (no --limit option available)
+# Send queued messages
 * * * * * root /usr/local/bin/mautic-cron.sh mautic:messages:send
 
-# Send scheduled emails (no --limit option available)
-* * * * * root /usr/local/bin/mautic-cron.sh mautic:emails:send
-
-# Send broadcast emails
+# Send broadcast emails (rate limited)
 * * * * * root /usr/local/bin/mautic-cron.sh mautic:broadcasts:send --limit=5
 
 # Import contacts from queue
