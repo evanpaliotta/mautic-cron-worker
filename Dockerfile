@@ -53,9 +53,11 @@ RUN cat > /usr/local/bin/check-db.sh << 'CHECKDB'
 MAX_RETRIES=${1:-3}
 RETRY_DELAY=${2:-5}
 
-# Source environment
+# Source environment and export all variables for PHP
 if [ -f /etc/mautic-env ]; then
+    set -a  # Auto-export all variables
     source /etc/mautic-env
+    set +a
 fi
 
 for i in $(seq 1 $MAX_RETRIES); do
@@ -107,9 +109,11 @@ RUN cat > /usr/local/bin/mautic-cron.sh << 'MAUTICCRON'
 # Redirect all output to the main process's stdout/stderr (PID 1)
 exec 1>/proc/1/fd/1 2>/proc/1/fd/2
 
-# Source the environment file if it exists
+# Source the environment file and export for PHP
 if [ -f /etc/mautic-env ]; then
+    set -a  # Auto-export all variables
     source /etc/mautic-env
+    set +a
 fi
 
 # Change to Mautic directory
