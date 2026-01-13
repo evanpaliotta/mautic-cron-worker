@@ -1,4 +1,4 @@
-# Mautic Cron Worker - PRODUCTION MODE (v6 - PERMANENT FIX)
+# Mautic Cron Worker - PRODUCTION MODE (v7 - with email stats monitoring)
 # Handles segment updates, campaign triggers, email sending, and daily backups
 #
 # FIXES APPLIED:
@@ -7,6 +7,8 @@
 # v5: Cron jobs now output to stdout for Railway visibility
 # v6: CRITICAL - Fixed environment file quoting for values with spaces (e.g., "Evan Paliotta")
 #     CRITICAL - Changed mautic:emails:send to messenger:consume email (Mautic 5 change)
+# v7: Added email-stats.sh script for accurate email stats (bypasses buggy UI)
+#     Hourly stats report in logs, can also run manually: railway run email-stats.sh
 FROM mautic/mautic:5-apache
 
 # Install cron, supervisord, and mysql-client for backups
@@ -103,6 +105,107 @@ exit 1
 CHECKDB
 
 RUN chmod +x /usr/local/bin/check-db.sh
+
+# Create email stats checker script (queries database directly for accurate counts)
+RUN cat > /usr/local/bin/email-stats.sh << 'EMAILSTATS'
+#!/bin/bash
+# Email Stats Checker - queries email_stats table for accurate send counts
+# Usage: email-stats.sh [--json]
+# This bypasses Mautic UI stats which can be inaccurate due to caching
+
+exec 1>/proc/1/fd/1 2>/proc/1/fd/2
+
+# Source environment
+if [ -f /etc/mautic-env ]; then
+    set -a
+    source /etc/mautic-env
+    set +a
+fi
+
+JSON_OUTPUT=false
+if [ "$1" == "--json" ]; then
+    JSON_OUTPUT=true
+fi
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Query the database directly for accurate email stats
+STATS=$(php -r "
+try {
+    \$host = getenv('MAUTIC_DB_HOST') ?: 'localhost';
+    \$port = getenv('MAUTIC_DB_PORT') ?: '3306';
+    \$name = getenv('MAUTIC_DB_NAME') ?: 'mautic';
+    \$user = getenv('MAUTIC_DB_USER') ?: 'root';
+    \$pass = getenv('MAUTIC_DB_PASSWORD') ?: '';
+
+    \$pdo = new PDO(\"mysql:host=\$host;port=\$port;dbname=\$name\", \$user, \$pass);
+    \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+    // Get total emails sent (from email_stats table - source of truth)
+    \$total = \$pdo->query('SELECT COUNT(*) FROM email_stats')->fetchColumn();
+
+    // Get emails sent today
+    \$today = \$pdo->query(\"SELECT COUNT(*) FROM email_stats WHERE DATE(date_sent) = CURDATE()\")->fetchColumn();
+
+    // Get emails sent in last hour
+    \$lastHour = \$pdo->query(\"SELECT COUNT(*) FROM email_stats WHERE date_sent >= DATE_SUB(NOW(), INTERVAL 1 HOUR)\")->fetchColumn();
+
+    // Get emails read
+    \$read = \$pdo->query('SELECT COUNT(*) FROM email_stats WHERE is_read = 1')->fetchColumn();
+
+    // Get per-email breakdown
+    \$perEmail = \$pdo->query('
+        SELECT e.id, e.name,
+               COUNT(es.id) as sent_actual,
+               e.sent_count as sent_cached,
+               SUM(CASE WHEN es.is_read = 1 THEN 1 ELSE 0 END) as read_count
+        FROM emails e
+        LEFT JOIN email_stats es ON e.id = es.email_id
+        GROUP BY e.id, e.name, e.sent_count
+        ORDER BY e.id
+    ')->fetchAll(PDO::FETCH_ASSOC);
+
+    echo json_encode([
+        'timestamp' => '$TIMESTAMP',
+        'total_sent' => (int)\$total,
+        'sent_today' => (int)\$today,
+        'sent_last_hour' => (int)\$lastHour,
+        'total_read' => (int)\$read,
+        'per_email' => \$perEmail
+    ]);
+} catch (Exception \$e) {
+    echo json_encode(['error' => \$e->getMessage()]);
+}
+" 2>/dev/null)
+
+if [ "$JSON_OUTPUT" = true ]; then
+    echo "$STATS"
+else
+    echo "[$TIMESTAMP] EMAIL-STATS: Querying database for accurate counts..."
+    echo "$STATS" | php -r "
+        \$data = json_decode(file_get_contents('php://stdin'), true);
+        if (isset(\$data['error'])) {
+            echo \"  ERROR: \" . \$data['error'] . PHP_EOL;
+            exit(1);
+        }
+        echo \"  Total Sent (all time): \" . \$data['total_sent'] . PHP_EOL;
+        echo \"  Sent Today: \" . \$data['sent_today'] . PHP_EOL;
+        echo \"  Sent Last Hour: \" . \$data['sent_last_hour'] . PHP_EOL;
+        echo \"  Total Read: \" . \$data['total_read'] . PHP_EOL;
+        echo \"  ---\" . PHP_EOL;
+        echo \"  Per Email Breakdown:\" . PHP_EOL;
+        foreach (\$data['per_email'] as \$email) {
+            \$name = substr(\$email['name'], 0, 40);
+            \$actual = \$email['sent_actual'];
+            \$cached = \$email['sent_cached'];
+            \$mismatch = \$actual != \$cached ? ' (MISMATCH!)' : '';
+            echo \"    [\$email[id]] \$name: \$actual sent, \$email[read_count] read\$mismatch\" . PHP_EOL;
+        }
+    "
+fi
+EMAILSTATS
+
+RUN chmod +x /usr/local/bin/email-stats.sh
 
 # Create the Mautic command wrapper script with database health check and retry
 RUN cat > /usr/local/bin/mautic-cron.sh << 'MAUTICCRON'
@@ -204,8 +307,12 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 0 4 * * * root /usr/local/bin/mautic-cron.sh mautic:maintenance:cleanup --days-old=365
 
 # =============================================================================
-# HEARTBEAT - proves cron is running (every 5 minutes)
+# MONITORING - email stats and heartbeat
 # =============================================================================
+# Email stats report (hourly) - queries database for accurate counts
+0 * * * * root /usr/local/bin/email-stats.sh >/proc/1/fd/1 2>&1
+
+# Heartbeat - proves cron is running (every 5 minutes)
 */5 * * * * root echo "[$(date '+\%Y-\%m-\%d \%H:\%M:\%S')] HEARTBEAT: Cron daemon is alive" >/proc/1/fd/1 2>&1
 
 # Empty line required at end
@@ -221,8 +328,9 @@ RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
 # NOTE: Do NOT use 'set -e' here - Mautic commands may return non-zero codes
 # even on success, which would cause the script to exit before supervisord starts
-echo "=== Mautic Cron Worker Starting (v6 - PERMANENT FIX) ==="
+echo "=== Mautic Cron Worker Starting (v7 - with email stats monitoring) ==="
 echo "    Fixes: env quoting, Mautic 5 messenger:consume email"
+echo "    New: email-stats.sh for accurate stats (runs hourly, bypasses buggy UI)"
 
 # Create local.php using PHP to properly read environment variables
 LOCAL_PHP="/var/www/html/config/local.php"
