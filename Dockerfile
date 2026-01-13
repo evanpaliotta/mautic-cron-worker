@@ -1,8 +1,12 @@
-# Mautic Cron Worker - PRODUCTION MODE
+# Mautic Cron Worker - PRODUCTION MODE (v6 - PERMANENT FIX)
 # Handles segment updates, campaign triggers, email sending, and daily backups
-# Fixed: Creates local.php config before starting cron
-# Fixed: Patches PendingEvent.php for PHP 8.x null metadata bug
-# Fixed: Cron jobs now output to stdout for Railway visibility
+#
+# FIXES APPLIED:
+# v3: Creates local.php config before starting cron
+# v4: Patches PendingEvent.php for PHP 8.x null metadata bug
+# v5: Cron jobs now output to stdout for Railway visibility
+# v6: CRITICAL - Fixed environment file quoting for values with spaces (e.g., "Evan Paliotta")
+#     CRITICAL - Changed mautic:emails:send to messenger:consume email (Mautic 5 change)
 FROM mautic/mautic:5-apache
 
 # Install cron, supervisord, and mysql-client for backups
@@ -177,8 +181,9 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 # Trigger campaign actions (schedules emails from campaigns)
 * * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:trigger --batch-limit=1
 
-# Send queued campaign emails (THIS IS THE ACTUAL EMAIL SENDER)
-* * * * * root /usr/local/bin/mautic-cron.sh mautic:emails:send --limit=1
+# MAUTIC 5 CHANGE: messenger:consume replaces mautic:emails:send
+# Process queued emails via Symfony Messenger (time-limit=50 prevents overlap)
+* * * * * root /usr/local/bin/mautic-cron.sh messenger:consume email --time-limit=50 --limit=1
 
 # Send queued messages
 * * * * * root /usr/local/bin/mautic-cron.sh mautic:messages:send
@@ -216,7 +221,8 @@ RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
 # NOTE: Do NOT use 'set -e' here - Mautic commands may return non-zero codes
 # even on success, which would cause the script to exit before supervisord starts
-echo "=== Mautic Cron Worker Starting (v5 - fixed early exit bug) ==="
+echo "=== Mautic Cron Worker Starting (v6 - PERMANENT FIX) ==="
+echo "    Fixes: env quoting, Mautic 5 messenger:consume email"
 
 # Create local.php using PHP to properly read environment variables
 LOCAL_PHP="/var/www/html/config/local.php"
@@ -254,9 +260,22 @@ chown www-data:www-data "$LOCAL_PHP"
 chmod 644 "$LOCAL_PHP"
 
 # Save environment variables for cron jobs to use
+# CRITICAL FIX: Properly quote values to handle spaces (e.g., "Evan Paliotta")
+# and values containing = signs (e.g., database URLs)
 echo "Saving environment variables for cron..."
-printenv | grep -E '^(MAUTIC_|MYSQL_|PATH=)' > /etc/mautic-env
+printenv | grep -E '^(MAUTIC_|MYSQL_|PATH=)' | sed 's/^\([^=]*\)=\(.*\)$/export \1="\2"/' > /etc/mautic-env
 chmod 644 /etc/mautic-env
+echo "Environment file created with $(wc -l < /etc/mautic-env) variables"
+
+# CRITICAL: Verify environment file can be sourced without errors
+echo "Verifying environment file syntax..."
+if bash -n /etc/mautic-env 2>&1; then
+    echo "  ✓ Environment file syntax OK"
+else
+    echo "  ✗ Environment file has syntax errors! Contents:"
+    cat /etc/mautic-env
+    exit 1
+fi
 
 # CRITICAL: Wait for database to be available before proceeding
 echo ""
