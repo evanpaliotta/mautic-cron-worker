@@ -1,4 +1,4 @@
-# Mautic Cron Worker - PRODUCTION MODE (v7 - with email stats monitoring)
+# Mautic Cron Worker - PRODUCTION MODE (v8 - bypass locking for reliability)
 # Handles segment updates, campaign triggers, email sending, and daily backups
 #
 # FIXES APPLIED:
@@ -9,6 +9,8 @@
 #     CRITICAL - Changed mautic:emails:send to messenger:consume email (Mautic 5 change)
 # v7: Added email-stats.sh script for accurate email stats (bypasses buggy UI)
 #     Hourly stats report in logs, can also run manually: railway run email-stats.sh
+# v8: Added --bypass-locking to campaigns:trigger and campaigns:rebuild to prevent
+#     stale lock files from blocking cron jobs (fixes "Script in progress" errors)
 FROM mautic/mautic:5-apache
 
 # Install cron, supervisord, and mysql-client for backups
@@ -276,13 +278,13 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 */2 * * * * root /usr/local/bin/mautic-cron.sh mautic:segments:update
 
 # Rebuild campaigns (add contacts from segments)
-*/2 * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:rebuild
+*/2 * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:rebuild --bypass-locking
 
 # =============================================================================
 # EMAIL SENDING - RATE LIMITED (1 email per minute for deliverability)
 # =============================================================================
 # Trigger campaign actions (schedules emails from campaigns)
-* * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:trigger --batch-limit=1
+* * * * * root /usr/local/bin/mautic-cron.sh mautic:campaigns:trigger --batch-limit=1 --bypass-locking
 
 # MAUTIC 5 CHANGE: messenger:consume replaces mautic:emails:send
 # Process queued emails via Symfony Messenger (time-limit=50 prevents overlap)
@@ -328,8 +330,8 @@ RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
 # NOTE: Do NOT use 'set -e' here - Mautic commands may return non-zero codes
 # even on success, which would cause the script to exit before supervisord starts
-echo "=== Mautic Cron Worker Starting (v7 - with email stats monitoring) ==="
-echo "    Fixes: env quoting, Mautic 5 messenger:consume email"
+echo "=== Mautic Cron Worker Starting (v8 - bypass locking for reliability) ==="
+echo "    Fixes: env quoting, Mautic 5 messenger:consume, stale lock bypass"
 echo "    New: email-stats.sh for accurate stats (runs hourly, bypasses buggy UI)"
 
 # Create local.php using PHP to properly read environment variables
