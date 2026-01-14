@@ -90,3 +90,4 @@ Logs are stored in `/var/log/mautic/`:
 ---
 
 *See `/09-email-sequencing/MAUTIC-SETUP.md` for complete Mautic documentation.*
+# Trigger rebuild Wed Jan 14 16:00:10 EST 2026
