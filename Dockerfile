@@ -1,4 +1,4 @@
-# Mautic Cron Worker - PRODUCTION MODE (v8 - bypass locking for reliability)
+# Mautic Cron Worker - PRODUCTION MODE (v9 - auto-republish campaigns)
 # Handles segment updates, campaign triggers, email sending, and daily backups
 #
 # FIXES APPLIED:
@@ -11,6 +11,8 @@
 #     Hourly stats report in logs, can also run manually: railway run email-stats.sh
 # v8: Added --bypass-locking to campaigns:trigger and campaigns:rebuild to prevent
 #     stale lock files from blocking cron jobs (fixes "Script in progress" errors)
+# v9: Added auto-republish script - campaigns keep getting unpublished by unknown cause
+#     This cron job ensures all campaigns stay published every minute
 FROM mautic/mautic:5-apache
 
 # Install cron, supervisord, and mysql-client for backups
@@ -209,6 +211,60 @@ EMAILSTATS
 
 RUN chmod +x /usr/local/bin/email-stats.sh
 
+# Create auto-republish script (ensures campaigns stay published)
+RUN cat > /usr/local/bin/auto-republish.sh << 'AUTOREPUB'
+#!/bin/bash
+# Auto-republish campaigns - fixes unknown issue causing campaigns to unpublish
+# Runs every minute to ensure campaigns stay active
+
+exec 1>/proc/1/fd/1 2>/proc/1/fd/2
+
+# Source environment
+if [ -f /etc/mautic-env ]; then
+    set -a
+    source /etc/mautic-env
+    set +a
+fi
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Update campaigns via PHP/PDO
+RESULT=$(php -r "
+try {
+    \$host = getenv('MAUTIC_DB_HOST') ?: 'localhost';
+    \$port = getenv('MAUTIC_DB_PORT') ?: '3306';
+    \$name = getenv('MAUTIC_DB_NAME') ?: 'mautic';
+    \$user = getenv('MAUTIC_DB_USER') ?: 'root';
+    \$pass = getenv('MAUTIC_DB_PASSWORD') ?: '';
+
+    \$pdo = new PDO(\"mysql:host=\$host;port=\$port;dbname=\$name\", \$user, \$pass);
+    \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+    // Count unpublished campaigns
+    \$stmt = \$pdo->query('SELECT COUNT(*) FROM campaigns WHERE is_published = 0');
+    \$unpublished = \$stmt->fetchColumn();
+
+    if (\$unpublished > 0) {
+        // Republish all campaigns
+        \$pdo->exec('UPDATE campaigns SET is_published = 1');
+        echo \"REPUBLISHED:\$unpublished\";
+    } else {
+        echo 'OK:0';
+    }
+} catch (Exception \$e) {
+    echo 'ERROR:' . \$e->getMessage();
+}
+" 2>/dev/null)
+
+# Only log if we had to republish something
+if [[ "$RESULT" == REPUBLISHED:* ]]; then
+    COUNT=${RESULT#REPUBLISHED:}
+    echo "[$TIMESTAMP] AUTO-REPUBLISH: Fixed $COUNT unpublished campaign(s)"
+fi
+AUTOREPUB
+
+RUN chmod +x /usr/local/bin/auto-republish.sh
+
 # Create the Mautic command wrapper script with database health check and retry
 RUN cat > /usr/local/bin/mautic-cron.sh << 'MAUTICCRON'
 #!/bin/bash
@@ -317,6 +373,9 @@ RUN cat > /etc/cron.d/mautic-cron << 'CRONTAB'
 # Heartbeat - proves cron is running (every 5 minutes)
 */5 * * * * root echo "[$(date '+\%Y-\%m-\%d \%H:\%M:\%S')] HEARTBEAT: Cron daemon is alive" >/proc/1/fd/1 2>&1
 
+# Auto-republish campaigns (workaround for unknown unpublishing bug)
+* * * * * root /usr/local/bin/auto-republish.sh
+
 # Empty line required at end
 CRONTAB
 
@@ -330,9 +389,9 @@ RUN cat > /usr/local/bin/cron-entrypoint.sh << 'CRONENTRY'
 #!/bin/bash
 # NOTE: Do NOT use 'set -e' here - Mautic commands may return non-zero codes
 # even on success, which would cause the script to exit before supervisord starts
-echo "=== Mautic Cron Worker Starting (v8 - bypass locking for reliability) ==="
+echo "=== Mautic Cron Worker Starting (v9 - auto-republish campaigns) ==="
 echo "    Fixes: env quoting, Mautic 5 messenger:consume, stale lock bypass"
-echo "    New: email-stats.sh for accurate stats (runs hourly, bypasses buggy UI)"
+echo "    New: auto-republish.sh keeps campaigns published (runs every minute)"
 
 # Create local.php using PHP to properly read environment variables
 LOCAL_PHP="/var/www/html/config/local.php"
