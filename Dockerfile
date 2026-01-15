@@ -1,4 +1,4 @@
-# Mautic Cron Worker - PRODUCTION MODE (v9 - auto-republish campaigns)
+# Mautic Cron Worker - PRODUCTION MODE (v10 - AWS SES API support)
 # Handles segment updates, campaign triggers, email sending, and daily backups
 #
 # FIXES APPLIED:
@@ -13,12 +13,31 @@
 #     stale lock files from blocking cron jobs (fixes "Script in progress" errors)
 # v9: Added auto-republish script - campaigns keep getting unpublished by unknown cause
 #     This cron job ensures all campaigns stay published every minute
+# v10: Added symfony/amazon-mailer for SES API transport (Railway blocks SMTP ports)
+#      Use DSN: ses+api://ACCESS_KEY:SECRET_KEY@default?region=us-east-2
 FROM mautic/mautic:5-apache
 
 # Install cron, supervisord, and mysql-client for backups
 USER root
 RUN apt-get update && apt-get install -y cron supervisor default-mysql-client && \
     rm -rf /var/lib/apt/lists/*
+
+# Install AWS SES API mailer (Railway blocks SMTP ports 25/465/587)
+# This enables ses+api:// DSN which uses HTTPS port 443
+RUN mkdir -p /var/www/.composer/cache && \
+    chown -R www-data:www-data /var/www/.composer
+
+USER www-data
+WORKDIR /var/www/html
+ENV COMPOSER_HOME=/var/www/.composer
+RUN composer require symfony/amazon-mailer \
+    --no-interaction \
+    --no-scripts \
+    --prefer-dist \
+    --optimize-autoloader && \
+    composer dump-autoload --optimize --classmap-authoritative
+
+USER root
 
 # CRITICAL FIX: Patch files to handle null metadata (PHP 8.x compatibility)
 # Bug: array_merge() fails when getMetadata() returns null on PHP 8.x
